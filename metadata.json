@@ -1,0 +1,5 @@
+{
+  "name": "YouTube to M3U Converter",
+  "description": "Convert YouTube links into an M3U playlist for IPTV players like SSIPTV.",
+  "requestFramePermissions": []
+}
