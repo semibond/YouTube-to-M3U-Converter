@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { Copy, Download, Plus, Trash2, Youtube } from "lucide-react";
+import { Copy, Download, Plus, Trash2, Youtube, Code } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
   CardContent,
@@ -39,6 +41,9 @@ export default function App() {
   const [group, setGroup] = useState("YouTube");
   const [logo, setLogo] = useState("");
   const [isLoadingTitle, setIsLoadingTitle] = useState(false);
+  
+  const [bulkInput, setBulkInput] = useState("");
+  const [exportMode, setExportMode] = useState("proxy-mp4");
 
   useEffect(() => {
     localStorage.setItem("yt-m3u-channels", JSON.stringify(channels));
@@ -47,7 +52,7 @@ export default function App() {
   // Auto-fetch title when URL changes
   useEffect(() => {
     const fetchTitle = async () => {
-      if (!url || !url.includes("youtube.com") && !url.includes("youtu.be")) return;
+      if (!url || (!url.includes("youtube.com") && !url.includes("youtu.be"))) return;
       
       setIsLoadingTitle(true);
       try {
@@ -87,8 +92,84 @@ export default function App() {
     setLogo("");
   };
 
+  const handleBulkAdd = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bulkInput.trim()) return;
+
+    const newChannels: Channel[] = [];
+    
+    // Create a temporary DOM element to parse HTML
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(bulkInput, "text/html");
+    
+    // Find all links that might be YouTube URLs
+    const links = doc.querySelectorAll('a[href*="youtube.com"], a[href*="youtu.be"]');
+    
+    if (links.length > 0) {
+      links.forEach((a) => {
+        const url = (a as HTMLAnchorElement).href;
+        let name = a.textContent?.trim() || "";
+        let logo = "";
+        
+        // Try to find an image in the same container (like the user's snippet)
+        const container = a.closest('.result-item') || a.parentElement;
+        if (container) {
+          const img = container.querySelector('img');
+          if (img) {
+            logo = img.src;
+          }
+        }
+        
+        if (!name) name = "Imported Video";
+        
+        newChannels.push({
+          id: uuidv4(),
+          name,
+          url,
+          group: "YouTube",
+          logo,
+        });
+      });
+    } else {
+      // Fallback: try to find plain URLs using regex
+      const urlRegex = /(https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)[\w-]+)/g;
+      const matches = bulkInput.match(urlRegex);
+      
+      if (matches) {
+        // Remove duplicates
+        const uniqueUrls = Array.from(new Set(matches));
+        uniqueUrls.forEach((url) => {
+          newChannels.push({
+            id: uuidv4(),
+            name: "Imported Video",
+            url,
+            group: "YouTube",
+            logo: "",
+          });
+        });
+      }
+    }
+
+    if (newChannels.length > 0) {
+      setChannels([...channels, ...newChannels]);
+      setBulkInput("");
+      alert(`Successfully added ${newChannels.length} channels!`);
+    } else {
+      alert("No YouTube links found in the input.");
+    }
+  };
+
   const removeChannel = (id: string) => {
     setChannels(channels.filter((c) => c.id !== id));
+  };
+
+  const handleClearAll = () => {
+    setChannels([]);
+  };
+
+  const extractVideoId = (url: string) => {
+    const match = url.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([^&?]+)/);
+    return match ? match[1] : null;
   };
 
   const generateM3U = () => {
@@ -101,7 +182,28 @@ export default function App() {
       if (channel.group) {
         m3u += ` group-title="${channel.group}"`;
       }
-      m3u += `,${channel.name}\n${channel.url}\n`;
+      m3u += `,${channel.name}\n`;
+
+      if (exportMode === "proxy-mp4") {
+        const videoId = extractVideoId(channel.url);
+        if (videoId) {
+          // Use a public Invidious instance to get the direct MP4 stream (itag 22 is 720p)
+          // Appending #.mp4 tricks the IPTV player into thinking it's a raw video file
+          m3u += `https://inv.tux.pizza/latest_version?id=${videoId}&itag=22#.mp4\n`;
+        } else {
+          m3u += `${channel.url}\n`;
+        }
+      } else if (exportMode === "proxy-hls") {
+        const videoId = extractVideoId(channel.url);
+        if (videoId) {
+          // HLS variant is native for IPTV players, great for live streams and long videos
+          m3u += `https://inv.tux.pizza/api/manifest/hls_variant/${videoId}#.m3u8\n`;
+        } else {
+          m3u += `${channel.url}\n`;
+        }
+      } else {
+        m3u += `${channel.url}\n`;
+      }
     });
     return m3u;
   };
@@ -140,68 +242,107 @@ export default function App() {
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8">
           <div className="md:col-span-5 space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Add Channel</CardTitle>
-                <CardDescription>
-                  Enter the YouTube video or live stream URL.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleAddChannel} className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="url">YouTube URL *</Label>
-                    <Input
-                      id="url"
-                      placeholder="https://www.youtube.com/watch?v=..."
-                      value={url}
-                      onChange={(e) => setUrl(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2 relative">
-                    <Label htmlFor="name">Channel / Video Name *</Label>
-                    <div className="relative">
-                      <Input
-                        id="name"
-                        placeholder="My Awesome Channel"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        required
-                        className={isLoadingTitle ? "pr-10" : ""}
-                      />
-                      {isLoadingTitle && (
-                        <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                          <div className="w-4 h-4 border-2 border-slate-300 border-t-red-600 rounded-full animate-spin" />
+            <Tabs defaultValue="single" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="single">Single Link</TabsTrigger>
+                <TabsTrigger value="bulk">Bulk / HTML Import</TabsTrigger>
+              </TabsList>
+              
+              <TabsContent value="single">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Add Channel</CardTitle>
+                    <CardDescription>
+                      Enter a single YouTube video or live stream URL.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <form onSubmit={handleAddChannel} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="url">YouTube URL *</Label>
+                        <Input
+                          id="url"
+                          placeholder="https://www.youtube.com/watch?v=..."
+                          value={url}
+                          onChange={(e) => setUrl(e.target.value)}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-2 relative">
+                        <Label htmlFor="name">Channel / Video Name *</Label>
+                        <div className="relative">
+                          <Input
+                            id="name"
+                            placeholder="My Awesome Channel"
+                            value={name}
+                            onChange={(e) => setName(e.target.value)}
+                            required
+                            className={isLoadingTitle ? "pr-10" : ""}
+                          />
+                          {isLoadingTitle && (
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                              <div className="w-4 h-4 border-2 border-slate-300 border-t-red-600 rounded-full animate-spin" />
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="group">Group Title</Label>
-                    <Input
-                      id="group"
-                      placeholder="News, Music, Sports..."
-                      value={group}
-                      onChange={(e) => setGroup(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="logo">Logo URL (Optional)</Label>
-                    <Input
-                      id="logo"
-                      placeholder="https://example.com/logo.png"
-                      value={logo}
-                      onChange={(e) => setLogo(e.target.value)}
-                    />
-                  </div>
-                  <Button type="submit" className="w-full">
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add to Playlist
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="group">Group Title</Label>
+                        <Input
+                          id="group"
+                          placeholder="News, Music, Sports..."
+                          value={group}
+                          onChange={(e) => setGroup(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="logo">Logo URL (Optional)</Label>
+                        <Input
+                          id="logo"
+                          placeholder="https://example.com/logo.png"
+                          value={logo}
+                          onChange={(e) => setLogo(e.target.value)}
+                        />
+                      </div>
+                      <Button type="submit" className="w-full">
+                        <Plus className="w-4 h-4 mr-2" />
+                        Add to Playlist
+                      </Button>
+                    </form>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+              
+              <TabsContent value="bulk">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Bulk Import</CardTitle>
+                    <CardDescription>
+                      Paste HTML code or text containing YouTube links. We'll extract the titles, thumbnails, and URLs automatically.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <form onSubmit={handleBulkAdd} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="bulk">HTML or Text Input</Label>
+                        <Textarea
+                          id="bulk"
+                          placeholder={`<div class="result-item">\n  <img src="...">\n  <a href="https://youtube.com/watch?v=...">Video Title</a>\n</div>`}
+                          value={bulkInput}
+                          onChange={(e) => setBulkInput(e.target.value)}
+                          className="min-h-[250px] font-mono text-xs"
+                          required
+                        />
+                      </div>
+                      <Button type="submit" className="w-full">
+                        <Code className="w-4 h-4 mr-2" />
+                        Parse & Add Links
+                      </Button>
+                    </form>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+            </Tabs>
           </div>
 
           <div className="md:col-span-7 space-y-6">
@@ -213,24 +354,44 @@ export default function App() {
                     {channels.length} {channels.length === 1 ? "channel" : "channels"} added
                   </CardDescription>
                 </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleCopy}
-                    disabled={channels.length === 0}
+                <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                  <select
+                    className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    value={exportMode}
+                    onChange={(e) => setExportMode(e.target.value)}
                   >
-                    <Copy className="w-4 h-4 mr-2" />
-                    Copy
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={handleDownload}
-                    disabled={channels.length === 0}
-                  >
-                    <Download className="w-4 h-4 mr-2" />
-                    Download .m3u
-                  </Button>
+                    <option value="proxy-mp4">Direct MP4 (Best for Movies/VOD)</option>
+                    <option value="proxy-hls">HLS .m3u8 (Best for Live Streams)</option>
+                    <option value="standard">Standard YouTube Link (SSIPTV Only)</option>
+                  </select>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCopy}
+                      disabled={channels.length === 0}
+                    >
+                      <Copy className="w-4 h-4 mr-2" />
+                      Copy
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleDownload}
+                      disabled={channels.length === 0}
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Download .m3u
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearAll}
+                      disabled={channels.length === 0}
+                    >
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Clear All
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent className="flex-1">
